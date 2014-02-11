@@ -1,0 +1,5 @@
+<use name="RecoPixelVertexing/PixelTriplets"/>
+<use name="RecoTracker/TkTrackingRegions"/>
+<export>
+  <lib name="1"/>
+</export>

@@ -33,6 +33,18 @@ public:
     theRecHits[2]=three;
     theRecHits[3]=four;
   }
+
+//Add by Gigi for CAseeding
+  SeedingHitSet(ConstRecHitPointer const & one, ConstRecHitPointer const & two,
+                ConstRecHitPointer const & three, ConstRecHitPointer const &four, ConstRecHitPointer const & five)
+  {
+    theRecHits[0]=one;
+    theRecHits[1]=two;
+    theRecHits[2]=three;
+    theRecHits[3]=four;
+    theRecHits[5]=five;
+  }
+
   
   ~SeedingHitSet(){}
   

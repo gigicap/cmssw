@@ -1,0 +1,549 @@
+#include "TripGenerator.h"
+
+#include <cmath>
+#include "RecoPixelVertexing/PixelTriplets/plugins/ThirdHitPredictionFromInvParabola.h"
+#include "RecoPixelVertexing/PixelTriplets/plugins/ThirdHitRZPrediction.h"
+#include "RecoTracker/TkMSParametrization/interface/PixelRecoUtilities.h"
+#include "RecoTracker/TkMSParametrization/interface/PixelRecoLineRZ.h"
+#include "RecoTracker/TkMSParametrization/interface/PixelRecoPointRZ.h"
+#include "FWCore/Framework/interface/ESHandle.h"
+
+#include "Geometry/TrackerGeometryBuilder/interface/TrackerGeometry.h"
+#include "Geometry/Records/interface/TrackerDigiGeometryRecord.h"
+#include "RecoTracker/TkHitPairs/interface/RecHitsSortedInPhi.h"
+#include "FWCore/MessageLogger/interface/MessageLogger.h"
+#include <iostream>
+
+#include "RecoPixelVertexing/PixelTriplets/plugins/ThirdHitCorrection.h"
+
+
+#include "RecoTracker/TkSeedingLayers/interface/SeedComparitorFactory.h"
+#include "RecoTracker/TkSeedingLayers/interface/SeedComparitor.h"
+
+#include "DataFormats/GeometryVector/interface/Pi.h"
+#include "RecoPixelVertexing/PixelTriplets/plugins/KDTreeLinkerAlgo.h"
+#include "RecoPixelVertexing/PixelTriplets/plugins/KDTreeLinkerTools.h"
+
+//using pixelrecoutilities::LongitudinalBendingCorrection;
+typedef PixelRecoRange<float> Range;
+
+using namespace std;
+using namespace ctfseeding;
+
+
+//Same constructors as in PixelTripletHLTGenerator
+
+TripGenerator:: TripGenerator(const edm::ParameterSet& cfg)
+: thePairGenerator(0),
+theLayerCache(0)
+//useMScat(cfg.getParameter<bool>("useMultScattering")),
+//useBend(cfg.getParameter<bool>("useBending")),
+{
+    theMaxElement=cfg.getParameter<unsigned int>("maxElement");
+    
+    //theta, phi, tip cuts from cfg
+    dphis = cfg.getParameter<std::vector<double>>("phicuts");
+    dthetas = cfg.getParameter<std::vector<double>>("thetacuts");
+    dTIPs = cfg.getParameter<std::vector<double>>("TIPcuts");
+        
+    edm::ParameterSet comparitorPSet =
+    cfg.getParameter<edm::ParameterSet>("SeedComparitorPSet");
+    std::string comparitorName = comparitorPSet.getParameter<std::string>("ComponentName");
+    theComparitor = (comparitorName == "none") ?
+    0 :  SeedComparitorFactory::get()->create( comparitorName, comparitorPSet);
+}
+
+TripGenerator::~TripGenerator()
+
+{ delete thePairGenerator;
+    delete theComparitor;
+}
+
+
+void TripGenerator::init( const HitPairGenerator & pairs,
+                         const std::vector<SeedingLayer> & layers,
+                         LayerCacheType* layerCache)
+{
+    thePairGenerator = pairs.clone();
+    theLayers = layers;
+    theLayerCache = layerCache;
+}
+
+//End of the constructors
+
+/*hitTriplept is the most part of the code. Here the pair creation is the same of PixelTripletHLTGenerator.*/
+
+void TripGenerator::hitTriplets(const TrackingRegion& region,
+                                OrderedHitTriplets & result,
+                                const edm::Event & ev,
+                                const edm::EventSetup& es)
+{
+    if (theComparitor) theComparitor->init(es);
+    OrderedHitPairs pairs; pairs.reserve(30000);
+    OrderedHitPairs::const_iterator ip;
+    
+    
+    //R_min (for phi calculation. pt_min = 1GeV/c)
+    float R_MIN=minRadiusCurvature(minPt, Bz);
+    
+    
+    thePairGenerator->hitPairs(region,pairs,ev,es);
+        
+    if (pairs.empty()) return;
+        
+    float regOffset = region.origin().perp(); //try to take account of non-centrality (?)
+    
+    int size = theLayers.size();
+    
+    //One vector of predictions and one of actual hit map (one element for aech seeding layer)
+    
+    //Definition of the hitmap vector of size = SeedingLayers size.
+    /* A RecHit container sorted in phi. Provides fast access for hits in a given phi window using binary search. */
+    std::vector<const RecHitsSortedInPhi *> thirdHitMap(size);
+    typedef RecHitsSortedInPhi::Hit Hit;
+    
+        
+    //Definition of the KDTree variables
+    //KDTreeNodeInfo Data stored in each KDTree node (in this case each KDTree node contains a RecHitsSortedInPhi::HitIter (a Hit))
+    std::vector<KDTreeNodeInfo<RecHitsSortedInPhi::HitIter> > layerTree; // re-used throughout
+    // Class that implements the KDTree partition of 2D space and a closest point search algorithm.
+    std::vector<KDTreeLinkerAlgo<RecHitsSortedInPhi::HitIter> > hitTree(size);
+    
+    std::vector<float> rzError(size,0.0f); //save maximum errors
+    double maxphi = Geom::twoPi(), minphi = -maxphi; // increase to cater for any range
+        
+    // fill the prediction vector
+    for (int il=0; il!=size; ++il) {
+        //cout<<"il = "<<il<<endl;
+        thirdHitMap[il] = &(*theLayerCache)(&theLayers[il], region, ev, es);
+        
+        /*A RecHit container sorted in phi. Range: is a pair of hits (min,max of the container)?  */
+        RecHitsSortedInPhi::Range hitRange = thirdHitMap[il]->all(); // Get iterators
+        layerTree.clear();
+        
+        double minz=999999.0, maxz= -999999.0; // Initialise to extreme values in case no hits
+        float maxErr=0.0f;
+        bool barrelLayer = (theLayers[il].detLayer()->location() == GeomDetEnumerators::barrel);
+        
+        if (hitRange.first != hitRange.second)
+        {
+            minz = barrelLayer? hitRange.first->hit()->globalPosition().z() : hitRange.first->hit()->globalPosition().perp();
+            maxz = minz; //In case there's only one hit on the layer
+            
+            //Loop on rechitssortedinphi to store in KDTreeGenerator and to define KDTreeBox bounds
+            for (RecHitsSortedInPhi::HitIter hi=hitRange.first; hi != hitRange.second; ++hi)
+            {
+                //redefine minz, maxz, maxerr
+                double angle = hi->phi();
+                double myz = barrelLayer? hi->hit()->globalPosition().z() : hi->hit()->globalPosition().perp();
+                //use (phi,r) for endcaps rather than (phi,z)
+                
+                if (myz < minz) { minz = myz;} else { if (myz > maxz) {maxz = myz;}}
+                
+                float myerr = barrelLayer? hi->hit()->errorGlobalZ(): hi->hit()->errorGlobalR();
+                
+                if (myerr > maxErr) { maxErr = myerr;}
+                
+                //store rechitssortedinphi inside the KDTreeGenerator
+                layerTree.push_back(KDTreeNodeInfo<RecHitsSortedInPhi::HitIter>(hi, angle, myz)); // save it
+                if (angle < 0)  // wrap all points in phi
+	      		{ layerTree.push_back(KDTreeNodeInfo<RecHitsSortedInPhi::HitIter>(hi, angle+Geom::twoPi(), myz));}
+                else
+	      		{ layerTree.push_back(KDTreeNodeInfo<RecHitsSortedInPhi::HitIter>(hi, angle-Geom::twoPi(), myz));}
+	      		
+            }
+        }
+        
+
+        
+        KDTreeBox phiZ(minphi, maxphi, minz-0.01, maxz+0.01);  // declare our bounds
+        
+        //To be used for the next checks
+        int layerindex = theLayers[il].detLayer()->seqNum();
+        minzl[layerindex] = minz-0.1;
+        maxzl[layerindex] = maxz+0.1;
+        
+        //the boxes are 2Pi wide
+        //add fudge factors in case only one hit and also for floating-point inaccuracy
+        hitTree[il].build(layerTree, phiZ); // make KDtree
+        rzError[il] = maxErr; //save error
+        
+        
+    }
+    
+
+    int p_cnt = 0;
+    
+    for (ip = pairs.begin(); ip != pairs.end(); ip++) {
+        
+        p_cnt++;
+        
+                
+        //Coordinates of the pair in (x,y,z) form (altrimenti tmp)
+        GlobalPoint gp1 = (*ip).inner()->globalPosition();
+        GlobalPoint gp2 = (*ip).outer()->globalPosition();
+        //GlobalPoint gp1(gp1tmp.x()-region.origin().x(), gp1tmp.y()-region.origin().y(), gp1tmp.z());
+        //GlobalPoint gp2(gp2tmp.x()-region.origin().x(), gp2tmp.y()-region.origin().y(), gp2tmp.z());
+        
+        
+        //float Theta = atan(1/line.cotLine());
+        //float Theta = atan((gp2.perp()-gp1.perp())/(gp2.z()-gp1.z()));
+        //if(Theta < 0) Theta = Theta + Geom::pi();
+        
+        //cout<<"Theta = "<<Theta<<endl;
+        
+        float yi = gp1.y();
+        float yo = gp2.y();
+        float xi = gp1.x();
+        float xo = gp2.x();
+        float zi = gp1.z();
+        float zo = gp2.z();
+        
+        //float d02 = sqrt(((yi*(xo-xi)-xi*(yo-yi))*(yi*(xo-xi)-xi*(yo-yi)))/((xo-xi)*(xo-xi)*(yo-yi)*(yo-yi)));
+        float d02 = sqrt(((yi*(xo-xi)-xi*(yo-yi))*(yi*(xo-xi)-xi*(yo-yi)))/((xo-xi)*(xo-xi)+(yo-yi)*(yo-yi)));
+        float r0 = sqrt(xi*xi+yi*yi-d02*d02);
+        float cotTheta = (zo-zi)/sqrt(xo*xo+yo*yo-r0*r0);
+        
+                
+        float phi2 = gp2.phi();
+        float phi1 = gp1.phi();
+        //Phi of the 0-1 line
+        
+        float dphi = fabs(phi2-phi1);
+        
+        float dy = gp2.y()-gp1.y();
+        float dx = gp2.x()-gp1.x();
+        
+        float d = sqrt(dx*dx+dy*dy);
+        
+       
+        
+        //Loop on Seeding layers (with defined hitlayers(KDTrees))
+        for (int il=0; il!=size; ++il) {
+
+            
+            if (hitTree[il].empty()) continue; // Don't bother if no hits
+            const DetLayer * layer = theLayers[il].detLayer();
+            
+            //layer index (lix) Is it necessary or is lix == il?
+            int lix = theLayers[il].detLayer()->seqNum();
+            
+            //Get the correct cut values for the selected layer
+            float dtheta = dthetas[lix];
+            float dphiss = dphis[lix];
+            float dTIP = dTIPs[lix];
+            
+           
+           // cout<<"Layer n. "<<il<<" is ID = "<<lix<<". MaxError = "<<rzError[il]<<endl;
+
+            
+            if (layer->location() != GeomDetEnumerators::barrel) {
+                std::cout<<"WARNING NOT THE BARREL"<<std::endl;
+            
+            }
+            
+            
+            float zpos[2] = {0,0};
+            float zmin, zmax;
+            //float minz, maxz;
+            
+            static float nSigmaRZ = std::sqrt(12.f); // ...and continue as before
+            
+            float dphi1 = 0;
+            float dphi2 = 0;
+            float sigmaZ = 0;
+            
+            if (layer->location() == GeomDetEnumerators::barrel) {
+                const BarrelDetLayer& bl = dynamic_cast<const BarrelDetLayer&>(*layer);
+                float halfThickness  = bl.surface().bounds().thickness()/2;
+                float radius = bl.specificSurface().radius();
+             
+                float rlmin = radius-halfThickness;
+                float rlmax = radius+halfThickness;
+                
+                dphi1 = fabs(acos(d/(2*R_MIN))-acos(rlmin/(2*R_MIN)));
+                
+                if(dphi1 > Geom::pi()) dphi1 = dphi1 - Geom::twoPi();
+                if(dphi1 < -Geom::pi()) dphi1 = dphi1 + Geom::twoPi();
+                
+                dphi2 = fabs(acos(d/(2*R_MIN))-acos(rlmax/(2*R_MIN)));
+                
+                if(dphi2 > Geom::pi()) dphi2 = dphi2 - Geom::twoPi();
+                if(dphi2 < -Geom::pi()) dphi2 = dphi2 + Geom::twoPi();
+            
+            
+                sigmaZ = nSigmaRZ*rzError[il];
+            
+          
+                zpos[0] = zi + sqrt(rlmin*rlmin-d02*d02)*cotTheta;
+                zpos[1] = zi + sqrt(rlmax*rlmax-d02*d02)*cotTheta;
+            
+  
+            }
+            // nothing for the endcaps now
+            
+            float zposmin = zpos[0]<=zpos[1] ? zpos[0] : zpos[1];
+            zmin = zposmin - sigmaZ - regOffset;
+            
+            float zposmax = zpos[0]<=zpos[1] ? zpos[1] : zpos[0];
+            zmax = zposmax + sigmaZ + regOffset;
+
+            
+            dphi1 = dphi1>=dphi2 ? dphi1 : dphi2;
+            dphi = dphi >= dphi1 ? dphi : dphi1;
+            
+            
+            float prmin = phi2 - dphi;
+            float prmax = phi2 + dphi;
+            
+            
+            //Still to keep?
+            //static float nSigmaPhi = 3.f;
+            
+            
+            layerTree.clear(); // Now recover hits in bounding box...
+            
+            if ((prmax-prmin) > Geom::twoPi())
+            {
+                prmax=Geom::pi(); prmin = -Geom::pi();
+            }
+            else
+            {
+                while (prmax>maxphi) { prmin -= Geom::twoPi(); prmax -= Geom::twoPi();}
+                while (prmin<minphi) { prmin += Geom::twoPi(); prmax += Geom::twoPi();}
+                // This needs range -twoPi to +twoPi to work
+            }
+            //End of phirange definition
+            
+            //Now we have a phi-RZ search box
+            //Define KDTree search box (nearest neighbor search) using boundaries defined for the pair
+            //KDTreeBox phiZ(prmin, prmax, zmin-regOffset-nSigmaRZ*rzError[il], zmax+regOffset+nSigmaRZ*rzError[il]);
+            KDTreeBox phiZ(prmin, prmax, zmin, zmax);
+            hitTree[il].search(phiZ, layerTree);
+            
+            
+            
+            /*int ihc = 0;
+            for (std::vector<KDTreeNodeInfo<RecHitsSortedInPhi::HitIter> >::iterator ih = layerTree.begin();
+                 ih !=layerTree.end(); ++ih)
+            { ihc++;}*/
+            
+            for (std::vector<KDTreeNodeInfo<RecHitsSortedInPhi::HitIter> >::iterator ih = layerTree.begin();
+                 ih !=layerTree.end(); ++ih)
+            {
+                
+            
+
+                
+                //Check for too many triplets
+                if (theMaxElement!=0 && result.size() >= theMaxElement){
+                    result.clear();
+                    edm::LogError("TooManyTriplets")<<" number of triples exceeds maximum. no triplets produced.";
+                    //cout<<" number of triples exceeds maximum. no triplets produced."<<endl;
+                    return;
+                }
+                
+                //Triplet defined here.
+                const RecHitsSortedInPhi::HitIter KDdata = (*ih).data;
+                OrderedHitTriplet hittriplet((*ip).inner(), (*ip).outer(), KDdata->hit());
+            
+                        
+               if (TIPFilter(&hittriplet, dTIP) && PhiFilter(&hittriplet, dphiss) && ThetaFilter(&hittriplet, dtheta)) {
+                   //if (PhiFilter(&hittriplet, dphiss) && ThetaFilter(&hittriplet, dtheta)) {
+                                    
+                               result.push_back(hittriplet);   // & ???
+                    
+                    
+                    //DEBUG
+                    //cout<<"Kdtree search window : phi["<<prmin<<" , "<<prmax<<"] ; z["<<zmin<<" , "<<zmax<<"]"<<endl;
+                    //cout<<"CORRECTED Kdtree search window : phi["<<prmin<<" , "<<prmax<<"] ; z["<<zmin-regOffset-nSigmaRZ*rzError[il]<<" , "<<zmax+regOffset+nSigmaRZ*rzError[il]<<"]"<<endl;
+                    //float eta = -log(tan(Theta/2));
+                    cout<<theLayers[il].detLayer()->seqNum()<<"\t"<<phi2<<"\t"<<prmin<<"\t"<<prmax<<"\t"<<prmax-prmin<<"\t"<<zmin<<"\t"<<zmax<<"\t"<<zmax-zmin<<endl;
+                       
+
+
+                    //BIG-DEBUG
+                    //cout<<theLayers[il].detLayer()->seqNum()<<"\t"<<phi2<<"\t"<<prmin<<"\t"<<prmax<<"\t"<<prmax-prmin<<"\t"<<Theta<<"\t"<<Thetam<<"\t"<<Thetap<<"\t"<<zmin<<"\t"<<zmax<<"\t"<<zmax-zmin<<"\t"<<dbgz_min<<"\t"<<dbgz_max<<endl;
+                    
+	   			}
+                else {
+                    LogDebug("RejectedTriplet") << "Triplet rejected at TIP filter"
+					<< hittriplet.outer()->globalPosition().x() << " "
+			 		<< hittriplet.outer()->globalPosition().y() << " "
+			 		<< hittriplet.outer()->globalPosition().z();
+                    //cout<<"Triplet rejected"<<endl;
+                }
+                
+                
+                
+                }
+                    
+            }
+        }
+    }
+//}
+
+//auxiliary methods 
+bool TripGenerator::checkPhiInRange(float phi, float phi1, float phi2) const
+{
+    while (phi > phi2) phi -=  Geom::ftwoPi();
+    while (phi < phi1) phi +=  Geom::ftwoPi();
+    return (  (phi1 <= phi) && (phi <= phi2) );
+}
+
+std::pair<float,float> TripGenerator::mergePhiRanges(const std::pair<float,float>& r1,
+                                                        const std::pair<float,float>& r2) const
+{ float r2_min=r2.first;
+    float r2_max=r2.second;
+    while (r1.first-r2_min > Geom::fpi()) { r2_min += Geom::ftwoPi(); r2_max += Geom::ftwoPi();}
+    while (r1.first-r2_min < -Geom::fpi()) { r2_min -= Geom::ftwoPi();  r2_max -= Geom::ftwoPi(); }
+    
+    return std::make_pair(min(r1.first,r2_min),max(r1.second,r2_max));
+}
+
+
+
+bool TripGenerator::ThetaFilter(OrderedHitTriplet *hittriplet, float deltaTheta) const
+{
+    
+    float h0x, h0y, h0r, h0z;
+    float h1x, h1y, h1r, h1z;
+    float h2x, h2y, h2r, h2z;
+    
+    h0x = hittriplet->inner()->globalPosition().x();
+    h0y = hittriplet->inner()->globalPosition().y();
+    h0z = hittriplet->inner()->globalPosition().z();
+    h0r = 	sqrt(h0x*h0x + h0y*h0y);
+    
+    h1x = hittriplet->middle()->globalPosition().x();
+    h1y = hittriplet->middle()->globalPosition().y();
+    h1z = hittriplet->middle()->globalPosition().z();
+    h1r = 	sqrt(h1x*h1x + h1y*h1y);
+    
+    h2x = hittriplet->outer()->globalPosition().x();
+    h2y = hittriplet->outer()->globalPosition().y();
+    h2z = hittriplet->outer()->globalPosition().z();
+    h2r = 	sqrt(h2x*h2x + h2y*h2y);
+
+    float dr1 = h1r - h0r;
+    float dz1 = h1z - h0z;
+    float dr2 = h2r - h1r;
+    float dz2 = h2z - h1z;
+    
+    float theta1 = atan2(dr1,dz1);
+    float theta2 = atan2(dr2,dz2);
+    
+    if(theta1 < 0 ) theta1 = -theta1;
+    if(theta2 < 0 ) theta2 = -theta2;
+    
+    //float dtheta = theta2/theta1;
+    float dtheta = fabs(theta2-theta1);
+
+    //if(fabs(dtheta -1)<= deltaTheta) return true;
+    if(dtheta<= deltaTheta) return true;
+    else
+     return false;
+    //return true;
+}
+
+bool TripGenerator::PhiFilter(OrderedHitTriplet *hittriplet, float deltaPhi) const
+{
+    
+    float h0x, h0y;
+    float h1x, h1y;
+    float h2x, h2y;
+    
+    h0x = hittriplet->inner()->globalPosition().x();
+    h0y = hittriplet->inner()->globalPosition().y();
+    
+    
+    h1x = hittriplet->middle()->globalPosition().x();
+    h1y = hittriplet->middle()->globalPosition().y();
+    
+    h2x = hittriplet->outer()->globalPosition().x();
+    h2y = hittriplet->outer()->globalPosition().y();
+    
+    float dx1 = h1x - h0x;
+    float dy1 = h1y - h0y;
+    float dx2 = h2x - h1x;
+    float dy2 = h2y - h1y;
+    
+    float phi1 = atan2(dy1,dx1);
+    float phi2 = atan2(dy2,dx2);
+    
+    float dphi = fabs(phi2-phi1);
+    if (dphi > Geom::pi()) dphi = dphi - Geom::twoPi();
+    if (dphi < -Geom::pi()) dphi  = dphi +Geom::twoPi();
+ 
+    if(dphi<= deltaPhi)	return true;
+    else
+    return false;
+    //return true;
+}
+
+
+
+bool TripGenerator::TIPFilter(OrderedHitTriplet *hittriplet, float deltaTIP) const
+{
+    //evaluation of the Transverse impact parameter using the formula from Dtrandlie et al.
+	
+	
+    float h0x, h0y, h0r;
+    float h1x, h1y, h1r;
+    float h2x, h2y, h2r;
+    
+    h0x = hittriplet->inner()->globalPosition().x();
+    h0y = hittriplet->inner()->globalPosition().y();
+    h0r = 	h0x*h0x + h0y*h0y;
+    
+    h1x = hittriplet->middle()->globalPosition().x();
+    h1y = hittriplet->middle()->globalPosition().y();
+    h1r = 	h1x*h1x + h1y*h1y;
+    
+    h2x = hittriplet->outer()->globalPosition().x();
+    h2y = hittriplet->outer()->globalPosition().y();
+    h2r = 	h2x*h2x + h2y*h2y;
+    
+    
+    TVector3 gp0(h0x, h0y, h0r);
+    TVector3 gp1(h1x, h1y, h1r);
+    TVector3 gp2(h2x, h2y, h2r);
+    
+    TVector3  a = gp1 - gp0;
+    TVector3  b = gp2 - gp1;
+    TVector3  n = a.Cross(b);
+    n = n.Unit();
+    
+    TVector2  cOrigin((-n.X())/(2*n.Z()) , (-n.Y())/(2*n.Z()));
+    float c = -(n.X()*gp0.X() + n.Y()*gp0.Y() + n.Z()*gp0.Z()); 
+    
+    //float sqrArg = (1.0 - n.Z()*n.Z() - 4.0*c*n.Z())/(4.0*n.Z()*n.Z());  //Unused?
+    float cR = sqrt((1.0 - n.Z()*n.Z() - 4.0*c*n.Z())/(4.0*n.Z()*n.Z()));
+    
+    TVector2  v(-cOrigin.X() , -cOrigin.Y());
+    v = v.Unit();
+    
+    TVector2  pCA(cOrigin.X() + cR*v.X(), cOrigin.Y() + cR*v.Y());
+    
+    float TIP = sqrt(pCA.X()*pCA.X() + pCA.Y()*pCA.Y());
+    
+    if(TIP<= deltaTIP)	return true;
+    else
+        return false;
+    
+	
+}
+
+
+
+float TripGenerator::minRadiusCurvature(float minPt, float Bz)
+const {
+	// e = 1.602177×10^-19 C  (coulombs)
+	const double Q = 1.602177E-19;
+	// 1 GeV/c = 5.344286×10^-19 J s/m  (joule seconds per meter)
+	const double GEV_C = 5.344286E-19;
+    
+	return minPt * GEV_C / (Bz * Q) * 1E2;
+}
+
+

@@ -1,0 +1,15 @@
+<library file="*.cc" name="TripGeneratorPlugins">
+ <use name="DataFormats/GeometryVector"/>
+ <use name="FWCore/Framework"/>
+ <use name="FWCore/MessageLogger"/>
+ <use name="FWCore/ParameterSet"/>
+ <use name="Geometry/Records"/>
+ <use name="Geometry/TrackerGeometryBuilder"/>
+ <use name="RecoPixelVertexing/PixelTriplets"/>
+ <use name="RecoTracker/TkHitPairs"/>
+ <use name="RecoTracker/TkMSParametrization"/>
+ <use name="RecoTracker/TkSeedingLayers"/>
+ <use name="TrackingTools/DetLayers"/>
+ <use name="root_interface"/>
+    <flags EDM_PLUGIN="1"/> 
+</library>
