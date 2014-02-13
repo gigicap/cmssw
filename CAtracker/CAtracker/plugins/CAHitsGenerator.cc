@@ -34,18 +34,26 @@
 m_debug(cfg.getUntrackedParameter<bool>("debug")),
 m_builderName(cfg.getUntrackedParameter <std::string> ("Builder")),
 dEta_cut(cfg.getParameter<double>("EtaCut"))*/
-CAHitsGenerator::CAHitsGenerator(const edm::ParameterSet& cfg)
+//CAHitsGenerator::CAHitsGenerator(const edm::ParameterSet& cfg)
+//TO DEBUG
+CAHitsGenerator::CAHitsGenerator(const edm::ParameterSet& cfg) :
+m_debug(cfg.getUntrackedParameter<bool>("debug")),
+m_builderName(cfg.getUntrackedParameter <std::string> ("Builder")),
+dEta_cut(cfg.getParameter<double>("EtaCut"))
     {
 
-    aPset = cfg.getParameter<edm::ParameterSet>("CAHitsGenerator");
+   // aPset = cfg.getParameter<edm::ParameterSet>("CAHitsGenerator");
      
-    m_debug = aPset.getUntrackedParameter<bool>("debug");
-    m_builderName = aPset.getUntrackedParameter <std::string> ("Builder");
-    dEta_cut = aPset.getParameter<double>("EtaCut");
-   // std::cout<<"Constructor starts"<<std::endl;
+   // m_debug = aPset.getUntrackedParameter<bool>("debug");
+   // m_builderName = aPset.getUntrackedParameter <std::string> ("Builder");
+   // dEta_cut = aPset.getParameter<double>("EtaCut");
+    std::cout<<"Constructor starts"<<std::endl;
+        
+    //    dEta_cut = 0.0256;
 
     //triplet producer definition (???)
-    oPset = aPset.getParameter<edm::ParameterSet>("OrderedHitsFactoryPSet");
+    //oPset = cfg.getParameter<edm::ParameterSet>("OrderedHitsFactoryPSet");
+    oPset = cfg.getParameter<edm::ParameterSet>("TripletFactoryForCAPSet");
     oName = oPset.getParameter<std::string>("ComponentName");
 
 
@@ -55,6 +63,23 @@ CAHitsGenerator::CAHitsGenerator(const edm::ParameterSet& cfg)
 	evtree = fs->make<TTree> ("evtree","");
     fittreegenerator();
 
+    std::cout<<"Constructor done"<<std::endl;
+        
+        
+        std::cout<<"setting generator"<<std::endl;
+        
+        generator = HitTripletGeneratorFromPairAndLayersFactory::get()->create(oName,oPset);
+        //generator = OrderedHitsGeneratorFactory::get()->create(oName,oPset);
+        //generator = PixelTripletHLTGenerator::get()->create(oName,oPset);
+        //generator = new PixelTripletHLTGenerator(oPset);
+        
+        //	scoll = *(tripletcollection.product());
+        
+        std::cout<<"Generator Has been set"<<std::endl;
+        
+        
+
+    
         
     eventcounter = 0;
     max_status = 3;
@@ -79,11 +104,11 @@ CAHitsGenerator::~CAHitsGenerator()
 void CAHitsGenerator::init(edm::Event& iEvent, const edm::EventSetup& iSetup)
 {
    using namespace edm;
-    
+/*
     //if (m_debug)
-    std::cout<<"Produce"<<std::endl;
+    std::cout<<"Begin init---"<<std::endl;
     
-    
+    std::cout<<"getting all parameters"<<std::endl;    
     
     
     // Regions regions = m_trackingRegionProducer->regions(iEvent, iSetup);
@@ -104,13 +129,13 @@ void CAHitsGenerator::init(edm::Event& iEvent, const edm::EventSetup& iSetup)
     
 //	scoll = *(tripletcollection.product());
     
-    
+    std::cout<<"Generator Has been set"<<std::endl;
     
 //	tripletCollection.reserve(scoll.size());
 //	fittedTripletCollection.reserve(scoll.size());
 //	result.clear();
 
-    
+    */
     
 return;
 }
@@ -120,17 +145,50 @@ void CAHitsGenerator::hitSets(const TrackingRegion& region, OrderedMultiHits& re
 {
 	
    using namespace edm;
+    
+    //From Init
+    //if (m_debug)
+    std::cout<<"Begin init---"<<std::endl;
+    
+    std::cout<<"getting all parameters"<<std::endl;
+    
+    
+    // Regions regions = m_trackingRegionProducer->regions(iEvent, iSetup);
+	//if (m_debug)
+	//	std::cout << "Created " << regions.size() << " tracking regions" << std::endl;
+    
+    
+	iSetup.get<TrackerDigiGeometryRecord>().get(tracker);
+ 	iSetup.get<TransientRecHitRecord>().get(m_builderName, builder);
+	iSetup.get<TrackerDigiGeometryRecord>().get(m_tracker);
+	iSetup.get<IdealMagneticFieldRecord>().get(theMF);
+    
+    
+    //edm::Handle<OrderedHitTriplets> tripletcollection;
+    //iEvent.getByLabel(m_inputTagTriplets, tripletcollection);
+    
+    //!!!!!!
+    
+    
+    
+    
+    
+    std::cout<<"Generating triplets"<<std::endl;
 
 	//produce triplets
     scoll = generator->run(region,iEvent,iSetup);
-        
+    
+    
+    std::cout<<"Generated!"<<std::endl;
+
+    
     tripletCollection.reserve(scoll.size());
     fittedTripletCollection.reserve(scoll.size());
     
 	
     for (size_t is = 0; is<scoll.size(); is++) {
         if (m_debug)
-            std::cout << "Starting triplet fit " << std::endl;
+            std::cout << "Starting hit usage " << std::endl;
      
         	
    	SeedingHitSet sset(scoll[is].inner(), scoll[is].middle(), scoll[is].outer());

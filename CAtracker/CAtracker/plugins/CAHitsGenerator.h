@@ -56,6 +56,7 @@
 
 #include "RecoTracker/TkTrackingRegions/interface/TrackingRegionProducerFactory.h"
 #include "RecoPixelVertexing/PixelTriplets/interface/HitTripletGeneratorFromPairAndLayersFactory.h"
+#include "RecoTracker/TkTrackingRegions/interface/OrderedHitsGeneratorFactory.h"
 #include "RecoTracker/TkTrackingRegions/interface/TrackingRegionProducer.h"
 #include "RecoTracker/TkTrackingRegions/interface/TrackingRegion.h"
 #include "RecoTracker/TkSeedingLayers/interface/SeedingHitSet.h"        
@@ -188,7 +189,7 @@ int max_status; //now can be set to = 3,
         edm::ESHandle<TrackerGeometry> m_tracker;
     
     //triplet generator stuff
-    edm::ParameterSet aPset;
+    //edm::ParameterSet aPset;
     edm::ParameterSet oPset;
     std::string oName;
     
@@ -216,6 +217,7 @@ int max_status; //now can be set to = 3,
 
     //PixelTripletHLTGenerator *generator;
     HitTripletGeneratorFromPairAndLayers *generator;
+    //OrderedHitsGenerator * generator;
 	edm::ESHandle<TrackerGeometry> tracker;
 	edm::ESHandle<TransientTrackingRecHitBuilder> builder;
 	edm::ESHandle<MagneticField> theMF;

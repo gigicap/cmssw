@@ -5,4 +5,3 @@
 #include "CAHitsGenerator.h"
 
 DEFINE_EDM_PLUGIN(OrderedHitsGeneratorFactory, CAHitsGenerator, "CAHitsGenerator");
-//DEFINE_FWK_MODULE(CAHitsGenerator);
