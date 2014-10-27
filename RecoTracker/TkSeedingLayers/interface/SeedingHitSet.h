@@ -12,14 +12,14 @@ public:
 
   static ConstRecHitPointer nullPtr() { return nullptr;}
 
-  SeedingHitSet() {theRecHits[0]=theRecHits[1]=theRecHits[2]=theRecHits[3]=nullptr;}
+  SeedingHitSet() {theRecHits[0]=theRecHits[1]=theRecHits[2]=theRecHits[3]=theRecHits[4]=nullptr;}
 
   SeedingHitSet(ConstRecHitPointer one, ConstRecHitPointer two) 
   // : theRecHits{{one,two,ConstRecHitPointer()}}
   {
     theRecHits[0]=one;
     theRecHits[1]=two;
-    theRecHits[2]=theRecHits[3]=nullptr;
+    theRecHits[2]=theRecHits[3]=theRecHits[4]=nullptr;
   }
   SeedingHitSet(ConstRecHitPointer  one, ConstRecHitPointer  two, 
 		ConstRecHitPointer three) 
@@ -28,7 +28,7 @@ public:
     theRecHits[0]=one;
     theRecHits[1]=two;
     theRecHits[2]=three;
-    theRecHits[3]=nullptr;
+    theRecHits[3]=theRecHits[4]=nullptr;
   }
   
   SeedingHitSet(ConstRecHitPointer one, ConstRecHitPointer two, 
@@ -38,17 +38,28 @@ public:
     theRecHits[1]=two;
     theRecHits[2]=three;
     theRecHits[3]=four;
+    theRecHits[4]=nullptr;
   }
   
+    SeedingHitSet(ConstRecHitPointer one, ConstRecHitPointer two, 
+		ConstRecHitPointer three, ConstRecHitPointer four, ConstRecHitPointer five) 
+  {
+    theRecHits[0]=one;
+    theRecHits[1]=two;
+    theRecHits[2]=three;
+    theRecHits[3]=four;
+    theRecHits[4]=five;
+  }
 
-  unsigned int size() const { return theRecHits[3] ? 4 : (theRecHits[2] ? 3 : ( theRecHits[1] ? 2 : 0 ) ); }
+
+  unsigned int size() const { return theRecHits[4] ? 5 : (theRecHits[3] ? 4 : (theRecHits[2] ? 3 : ( theRecHits[1] ? 2 : 0 )) ); }
 
   ConstRecHitPointer  get(unsigned int i) const { return theRecHits[i]; }
   ConstRecHitPointer  operator[](unsigned int i) const { return theRecHits[i]; }
   
   
 private:
-  ConstRecHitPointer theRecHits[4];
+  ConstRecHitPointer theRecHits[5];
 };
 
 

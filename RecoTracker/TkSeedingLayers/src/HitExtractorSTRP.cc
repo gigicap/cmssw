@@ -82,7 +82,7 @@ HitExtractorSTRP::skipThis(const TkTransientTrackingRecHitBuilder& ttrhBuilder,
   // replace with one
 
   auto cloner = ttrhBuilder.cloner();
-  replaceMe = cloner.project(hit, rejectSt, TrajectoryStateOnSurface()).release();
+   replaceMe = cloner.project(hit, rejectSt, TrajectoryStateOnSurface()).release();
   if (rejectSt)
     LogDebug("HitExtractorSTRP")<<"a matched hit is partially masked, and the mono hit got projected onto: "<<replaceMe->geographicalId().rawId()<<" key: "<<hit.monoClusterRef().key();
   else 
@@ -142,7 +142,20 @@ HitExtractor::Hits HitExtractorSTRP::hits(const TkTransientTrackingRecHitBuilder
       edm::Handle<SiStripMatchedRecHit2DCollection> matchedHits;
       ev.getByToken( theMatchedHits, matchedHits);
       if (skipClusters) cleanFrom=result.size();
-      range2SeedingHits( *matchedHits, result, accessor.stripTIBLayer(theIdLayer)); 
+       //brutely MODIFIED  by Gigi
+       if (minAbsZ>0.) {
+     		std::pair<DetId,DetIdTIBSameLayerComparator> getter = accessor.stripTIBLayer(theIdLayer);
+     		SiStripMatchedRecHit2DCollection::Range range = matchedHits->equal_range(getter.first, getter.second);
+     		for (SiStripMatchedRecHit2DCollection::const_iterator it = range.first; it != range.second; ++it) {
+       			for (SiStripMatchedRecHit2DCollection::DetSet::const_iterator hit = it->begin(), end = it->end(); hit != end; ++hit) {
+         			if (fabs(hit->globalPosition().z())>=minAbsZ) result.emplace_back(*hit); 
+       			}
+     		}
+       } 
+       else {
+     	range2SeedingHits( *matchedHits, result, accessor.stripTIBLayer(theIdLayer)); 
+       }
+      //range2SeedingHits( *matchedHits, result, accessor.stripTIBLayer(theIdLayer)); 
       if (skipClusters) cleanedOfClusters(ttrhBuilder, ev,result,true,cleanFrom);
     }
     if (hasRPhiHits) {
